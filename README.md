@@ -6,7 +6,7 @@ reuse dependencies, toolchains and build outputs between runs. It detects Rust, 
 
 ```yaml
 - uses: actions/checkout@v6
-- uses: tensorlakeai/github-runners@main
+- uses: tensorlakeai/github-runners@v1
 ```
 
 ## Run jobs on Tensorlake
@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
-      - uses: tensorlakeai/github-runners@main
+      - uses: tensorlakeai/github-runners@v1
       # After the cache step, so a restored toolchain is reused.
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -68,7 +68,7 @@ jobs:
         with:
           node-version: "24"
           package-manager-cache: false
-      - uses: tensorlakeai/github-runners@main
+      - uses: tensorlakeai/github-runners@v1
       - run: npm ci
       - run: npm run build
       - run: npm test
@@ -78,7 +78,7 @@ With pnpm, add `- uses: pnpm/action-setup@v4` before `actions/setup-node`, then 
 `pnpm install --frozen-lockfile`. To keep framework build caches too, list them in `paths`:
 
 ```yaml
-      - uses: tensorlakeai/github-runners@main
+      - uses: tensorlakeai/github-runners@v1
         with:
           paths: |
             .next/cache
@@ -98,7 +98,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - uses: tensorlakeai/github-runners@main
+      - uses: tensorlakeai/github-runners@v1
       - run: go build ./...
       - run: go test ./...
 ```
@@ -115,7 +115,7 @@ jobs:
       - uses: astral-sh/setup-uv@v8
         with:
           enable-cache: false
-      - uses: tensorlakeai/github-runners@main
+      - uses: tensorlakeai/github-runners@v1
       - run: uv sync --locked
       - run: uv run pytest
 ```
@@ -129,7 +129,7 @@ Jobs share a cache when they run the same job of the same workflow. Give each ma
 builds something different its own `key`:
 
 ```yaml
-      - uses: tensorlakeai/github-runners@main
+      - uses: tensorlakeai/github-runners@v1
         with:
           key: ${{ matrix.target }}
 ```
