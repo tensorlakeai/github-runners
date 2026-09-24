@@ -46,3 +46,33 @@ jobs:
 
       - name: Verify Docker
         run: docker run --rm hello-world
+
+  # A local `uses: ./` skips the action's pre step. Referencing the published
+  # action runs it, so this job covers the prefetch that overlaps checkout.
+  published:
+    runs-on: tensorlake-small
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore cache
+        id: cache
+        uses: tensorlakeai/github-runners@main
+        with:
+          languages: none
+          paths: ~/.cache/tensorlake-canary
+          key: published
+
+      - name: Check restored data
+        env:
+          RESTORED: ${{ steps.cache.outputs.restored }}
+        run: |
+          data="$HOME/.cache/tensorlake-canary"
+          if [[ "$RESTORED" == *custom* ]]; then
+            (cd "$data" && sha256sum --quiet -c checksums)
+            echo "Warm: restored data matches its checksums."
+          else
+            mkdir -p "$data"
+            for i in $(seq 1 1000); do head -c 262144 /dev/urandom > "$data/file-$i"; done
+            (cd "$data" && sha256sum file-* > checksums)
+          fi
