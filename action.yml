@@ -1,0 +1,66 @@
+name: Tensorlake cache
+description: >-
+  Persistent Rust, Node.js, Go, and Python caches for jobs on Tensorlake
+  runners. Restores to local disk before the build and saves on the default
+  branch after it.
+author: Tensorlake
+branding:
+  icon: zap
+  color: purple
+
+inputs:
+  languages:
+    description: >-
+      Which caches to manage: auto (detect from lockfiles), none, or a comma
+      list of rust, node, go, python.
+    required: false
+    default: auto
+  paths:
+    description: >-
+      Extra files or directories to cache, one per line, relative to
+      working-directory or starting with ~/.
+    required: false
+    default: ""
+  key:
+    description: >-
+      Extra scope for this job's cache. Set it per matrix entry when entries
+      build different things, for example the target triple.
+    required: false
+    default: ""
+  working-directory:
+    description: Directory to search for lockfiles.
+    required: false
+    default: .
+  save:
+    description: >-
+      auto saves only on pushes to the default branch when dependencies or
+      toolchains changed; true always saves; false never saves.
+    required: false
+    default: auto
+  default-branch:
+    description: Branch whose runs save the cache when save is auto.
+    required: false
+    default: ${{ github.event.repository.default_branch }}
+  prefetch:
+    description: Download the cache from the volume in bulk before restoring it.
+    required: false
+    default: "true"
+  sync-timeout:
+    description: >-
+      Seconds to wait after saving until the upload is durable. 0 leaves it to
+      the runner's end-of-job publication.
+    required: false
+    default: "180"
+
+outputs:
+  languages:
+    description: Comma-separated caches this job manages.
+  restored:
+    description: Comma-separated caches restored from an earlier run.
+
+runs:
+  using: node24
+  pre: src/pre.js
+  main: src/main.js
+  post: src/post.js
+  post-if: success()

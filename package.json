@@ -1,0 +1,11 @@
+{
+  "name": "github-runners",
+  "private": true,
+  "description": "Persistent caches for GitHub Actions jobs on Tensorlake runners.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

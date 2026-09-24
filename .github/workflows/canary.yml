@@ -1,0 +1,48 @@
+name: Tensorlake cache canary
+
+# Exercises the action on a real Tensorlake runner and cache volume. Requires
+# this repository to be connected in a Tensorlake project's GitHub Actions view.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tensorlake-cache-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: tensorlake-small
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore cache
+        id: cache
+        uses: ./
+        with:
+          languages: none
+          paths: ~/.cache/tensorlake-canary
+
+      - name: Check restored data
+        env:
+          RESTORED: ${{ steps.cache.outputs.restored }}
+        run: |
+          data="$HOME/.cache/tensorlake-canary"
+          echo "Cache volume: ${TENSORLAKE_CACHE_DIR:-not mounted}"
+          if [[ "$RESTORED" == *custom* ]]; then
+            (cd "$data" && sha256sum --quiet -c checksums)
+            echo "Warm: restored data matches its checksums."
+          else
+            echo "Cold: generating 256 MiB across 2,000 files."
+            mkdir -p "$data"
+            for i in $(seq 1 2000); do head -c 131072 /dev/urandom > "$data/file-$i"; done
+            (cd "$data" && sha256sum file-* > checksums)
+          fi
+
+      - name: Verify Docker
+        run: docker run --rm hello-world

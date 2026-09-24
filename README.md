@@ -1,180 +1,213 @@
-# Tensorlake GitHub Workers
+# Tensorlake GitHub Actions cache
 
-Ephemeral GitHub Actions runners on Tensorlake. An organization `workflow_job` webhook schedules a
-durable Tensorlake function that boots a fresh sandbox from a prebuilt runner image, runs exactly one
-job, and tears the sandbox down. Adapted from
-[`donkersgoed/github-runner-ochestrator`](https://github.com/donkersgoed/github-runner-ochestrator),
-replacing its AWS scheduling layer (API Gateway, Lambda, SQS, CDK) with Tensorlake Orchestrate and
-Sandboxes while keeping the GitHub contract.
+One step that makes jobs on [Tensorlake runners](https://docs.tensorlake.ai/github-actions/quickstart)
+reuse dependencies, toolchains and build outputs between runs. It detects Rust, Node.js
+(JavaScript and TypeScript), Go and Python projects and needs no configuration.
 
-**Flow:** GitHub sends a `workflow_job` event → the webhook signature is verified with
-`GITHUB_WEBHOOK_SECRET` → only `queued` jobs carrying the `tensorlake` label are accepted →
-`run_github_runner` mints repository-scoped GitHub App JIT runner credentials, provisions and mounts
-that same repository's cache volume, starts the sandbox, supervises the single job, and terminates
-the sandbox. Repository scope is part of the isolation boundary: an organization-scoped runner could
-claim another repository's queued job after its cache had already been selected.
+```yaml
+- uses: actions/checkout@v6
+- uses: tensorlakeai/github-runners@main
+```
 
-## Files
+## Run jobs on Tensorlake
 
-- `github_runner_orchestrator/app.py` — Tensorlake application and functions.
-- `github_runner_orchestrator/cache.py` — per-repository cache volume naming and provisioning.
-- `github_runner_orchestrator/github.py` — GitHub App JWT, installation token, and JIT runner APIs.
-- `github_runner_orchestrator/webhook.py` — HMAC verification and `workflow_job` filtering.
-- `github_runner_orchestrator/resources.py` — runner resource profiles.
-- `actions/setup-rust-cache/action.yml`, `actions/setup-uv-cache/action.yml` — reusable cache actions.
-- `sandbox-image/Dockerfile`, `scripts/build-runner-image.sh` — the runner sandbox image.
+1. In the [Tensorlake dashboard](https://cloud.tensorlake.ai), open your project's **GitHub Actions**
+   view and click **Connect GitHub**. Install the **Tensorlake GitHub Actions** App on the
+   repositories that should use Tensorlake runners.
+2. Set `runs-on` to a Tensorlake runner label. You don't need `self-hosted` or an API key.
 
-Orchestrate functions are `async`; blocking GitHub REST calls run via `asyncio.to_thread()`, sandbox
-calls use the async Sandbox SDK.
+   | Label | vCPUs | Memory | Disk |
+   |---|---:|---:|---:|
+   | `tensorlake-small` (or `tensorlake`) | 2 | 4 GiB | 10 GiB |
+   | `tensorlake-medium` | 4 | 8 GiB | 50 GiB |
+   | `tensorlake-large` | 8 | 16 GiB | 100 GiB |
+   | `tensorlake-xlarge` | 16 | 32 GiB | 100 GiB |
 
-## Setup
+   Custom sizes are in [Choose runner resources](https://docs.tensorlake.ai/github-actions/runners).
+3. Add the cache step after `actions/checkout`, as in the examples below.
 
-Run the wizard from the repository root:
+Every repository gets a persistent cache volume, mounted at `TENSORLAKE_CACHE_DIR`. This action
+manages what goes into it.
+
+## Examples
+
+Put the cache step after checkout and after any setup action for the language runtime.
+Turn off the setup action's own cache, which would otherwise also use GitHub's cache service.
+
+### Rust
+
+```yaml
+jobs:
+  test:
+    runs-on: tensorlake-large
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: tensorlakeai/github-runners@main
+      # After the cache step, so a restored toolchain is reused.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+```
+
+### TypeScript and JavaScript
+
+npm, pnpm, Yarn and Bun are detected from their lockfiles.
+
+```yaml
+jobs:
+  build:
+    runs-on: tensorlake-medium
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - uses: tensorlakeai/github-runners@main
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+```
+
+With pnpm, add `- uses: pnpm/action-setup@v4` before `actions/setup-node`, then run
+`pnpm install --frozen-lockfile`. To keep framework build caches too, list them in `paths`:
+
+```yaml
+      - uses: tensorlakeai/github-runners@main
+        with:
+          paths: |
+            .next/cache
+            node_modules/.cache
+```
+
+### Go
+
+```yaml
+jobs:
+  build:
+    runs-on: tensorlake-medium
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: tensorlakeai/github-runners@main
+      - run: go build ./...
+      - run: go test ./...
+```
+
+### Python
+
+```yaml
+jobs:
+  test:
+    runs-on: tensorlake-small
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: false
+      - uses: tensorlakeai/github-runners@main
+      - run: uv sync --locked
+      - run: uv run pytest
+```
+
+pip and Poetry projects are detected from `requirements*.txt`, `poetry.lock` or `Pipfile.lock`.
+With `actions/setup-python`, leave its `cache` input unset.
+
+### Matrix jobs
+
+Jobs share a cache when they run the same job of the same workflow. Give each matrix entry that
+builds something different its own `key`:
+
+```yaml
+      - uses: tensorlakeai/github-runners@main
+        with:
+          key: ${{ matrix.target }}
+```
+
+## What is cached
+
+| Language | Detected from | Cached |
+|---|---|---|
+| Rust | `Cargo.lock`, or `Cargo.toml` without one | Cargo registry and git dependencies, installed binaries, the rustup toolchain, and `target` (or `CARGO_TARGET_DIR`) without incremental data. Sets `CARGO_INCREMENTAL=0`. |
+| Node.js | `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, or `package.json` | The package manager's download store, as reported by `npm`, `pnpm`, `yarn` or `bun`. `node_modules` is rebuilt from it. |
+| Go | `go.mod` | The module cache (`GOMODCACHE`), the build cache (`GOCACHE`) and the golangci-lint cache. |
+| Python | `uv.lock`, `poetry.lock`, `requirements*.txt`, `pyproject.toml` | The uv cache and uv-installed Pythons, the pip cache and the Poetry cache. |
+
+Lockfiles are found up to four directories deep, so monorepos with several projects work
+without extra configuration.
+
+## How it works
+
+Restore and save run as their own phases, so tools never touch the network-backed volume while
+they build:
+
+- **Before the job's first step**, the action starts downloading this job's cache from the volume
+  in the background, while checkout and toolchain setup run.
+- **At the cache step**, the archives are unpacked to local disk in parallel. The cache is
+  restored from the newest save of the same workflow job, whichever branch it came from.
+- **After the job succeeds**, the cache is saved again only if the job ran on the default branch
+  and the lockfiles or toolchain changed. It then waits, up to `sync-timeout`, for the mount to
+  report the upload as published; the runner also publishes the volume when the job ends. Pull
+  requests and other branches restore the cache but never write it.
+
+Each save is stored as parallel zstd archives of about 150–200 MB each. Directory timestamps are
+restored last, so Cargo doesn't rerun build scripts.
+
+The layout follows a customer's measurements of Rust CI with a 4.7 GB target directory on
+`tensorlake-large`, where they compared these hand-built setups:
+
+| Setup | Warm job |
+|---|---:|
+| `CARGO_TARGET_DIR` on the cache volume | 9–11 min (slower than a cold 4 min build) |
+| One 1.2 GB archive | 85–128 s |
+| Eight parallel archives extracted to local disk (the layout this action uses) | 41–58 s |
+| GitHub-hosted 8-core runner with `Swatinem/rust-cache` | 36–44 s |
+
+Pointing a tool directly at `TENSORLAKE_CACHE_DIR` still works, but it's slower for any cache made
+of many small files.
+
+## Inputs
+
+| Input | Default | Description |
+|---|---|---|
+| `languages` | `auto` | `auto`, `none`, or a comma list of `rust`, `node`, `go`, `python`. |
+| `paths` | | Extra files or directories to cache, one per line, relative to `working-directory` or starting with `~/`. |
+| `key` | | Separates caches for jobs that build different things, such as matrix entries. |
+| `working-directory` | `.` | Where to search for lockfiles. |
+| `save` | `auto` | `auto` saves on the default branch when dependencies changed; `true` saves on any branch; `false` never saves. |
+| `prefetch` | `true` | Download the cache in bulk before restoring it. |
+| `sync-timeout` | `180` | Seconds to wait for the upload after saving; `0` leaves it to the runner's end-of-job upload. |
+
+Outputs: `languages` lists the caches managed by the step, and `restored` lists the ones restored
+from an earlier run.
+
+## Cache scope and safety
+
+- Jobs of a repository share one volume. Keep secrets out of cached paths.
+- Pull request jobs don't save through this action, but the volume is mounted read-write, so code
+  in a pull request can still write to it directly.
+- Without a cache volume (another runner, or a mount that failed its health check), the step logs
+  a notice and the job builds normally. A failed restore or save never fails the job.
+- To start over, change `key`, or delete the `tensorlake-cache-v1` directory on the volume from a
+  job.
+
+## Development
+
+The action is plain Node.js with no dependencies or build step.
 
 ```bash
-./scripts/configure-github-org.sh
+npm test
 ```
 
-It installs the `gh`, `tl`, and `uv` tools as needed, explains each GitHub step, stores the secrets,
-builds the runner image, deploys the application, and creates the organization webhook. You need
-organization-owner access and a Tensorlake project.
-
-**GitHub App vs. webhook.** Register the GitHub App with **Webhook → Active disabled** and only the
-**Administration: Read and write** repository permission — it supplies credentials only. A
-*separate* organization webhook (created after deploy, using the endpoint the deploy returns) delivers
-`workflow_job` events. Both use the same `GITHUB_WEBHOOK_SECRET`.
-
-**Secrets** (set by the wizard, or manually with `tl secrets set`):
-`GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_INSTALLATION_ID`,
-`GITHUB_APP_PRIVATE_KEY`, `RUNNER_GROUP_ID` (default `1`), and
-`RUNNER_TENSORLAKE_API_KEY` (project-scoped). The runner-specific name avoids the runtime-owned
-`TENSORLAKE_*` environment namespace; the application passes the key explicitly to Tensorlake SDK
-clients. Redeploy after changing a secret so the new value takes effect.
-
-- **Upgrade:** `git pull --ff-only && ./scripts/configure-github-org.sh --upgrade`.
-  The script defaults to Tensorlake organization `org_T7MwTdFrBRHdpQPWf8Jdh` and project
-  `project_Bn6BzggtncBfqQPFHJC8T`. Set `TENSORLAKE_ORGANIZATION_ID` and
-  `TENSORLAKE_PROJECT_ID` to use a different destination. The script also installs the Python
-  Tensorlake SDK version that matches the installed `tl` version.
-- **Resume a stopped deploy** (skips the GitHub App inputs and image rebuild):
-  `./scripts/configure-github-org.sh --resume-from-step-6 <org>`.
-
-Runner image name, timeout, maximum concurrent runner count, and required label are plain constants
-near the top of `app.py`.
-
-## Runner image
-
-```bash
-./scripts/build-runner-image.sh
-```
-
-Builds and registers the `github-actions-runner` sandbox image. It is based on **Ubuntu 22.04**
-(imported into the project as `ubuntu-2204-base`; the script imports it if missing) and installs
-systemd — booted as PID 1 so Docker's systemd units start — Docker CE, the `tl` CLI with FUSE
-support, and the GitHub Actions runner, and creates the `tl-user` account.
-The TLFS-capable `tl` binary is pinned by `TENSORLAKE_CLI_VERSION` in the Dockerfile and recorded as
-an OCI label so rebuilding an image cannot silently select a different mount implementation. Change
-that Dockerfile pin only when deliberately qualifying an upgrade. The base is a platform rootfs, so
-its builder intentionally has no runtime build-argument override channel.
-
-Base the image on an OS whose glibc matches your release ABI target: Ubuntu 22.04 ships glibc 2.35,
-which keeps release binaries within a GLIBC ≤ 2.34 floor. A newer base (e.g. Ubuntu 24.04 / glibc
-2.39) links binaries that fail such a compatibility check.
-
-Workflow steps run as `tl-user` (passwordless `sudo`, Docker access), matching GitHub-hosted runners:
-
-```yaml
-- run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-```
-
-## Runner resources
-
-`runs-on: [self-hosted, tensorlake, <profile>]` selects CPU, memory, and disk:
-
-| Label | CPUs | Memory | Disk |
-|---|---:|---:|---:|
-| none or `tensorlake-small` | 2 | 4 GiB | 10 GiB |
-| `tensorlake-medium` | 4 | 8 GiB | 50 GiB |
-| `tensorlake-large` | 8 | 16 GiB | 100 GiB |
-| `tensorlake-xlarge` | 16 | 32 GiB | 100 GiB |
-
-Profiles live in `github_runner_orchestrator/resources.py` (disks capped at 100 GiB). Docker is
-available on every profile. Multiple profile labels are rejected.
-
-## Persistent cache
-
-Each repository gets its own Tensorlake Cloud Volume, mounted by the orchestrator at
-`/mnt/tensorlake-cache` and exported to the job as `TENSORLAKE_CACHE_DIR`. It is a plain writable
-directory (not an `actions/cache` service); point a tool's cache directory at a namespaced child:
-
-```yaml
-- run: |
-    d="${TENSORLAKE_CACHE_DIR}/my-tool/${RUNNER_OS}-${RUNNER_ARCH}"
-    mkdir -p "$d"
-    echo "MY_TOOL_CACHE=$d" >> "$GITHUB_ENV"
-```
-
-- Namespace by anything that makes cached files incompatible: OS, arch, toolchain, target, profile,
-  and a manual version you can bump.
-- Never write secrets (tokens, registry credentials, signing material) into the volume. Pull requests
-  and branches of a repository share its cache, so do not expose the runner to untrusted code.
-- The JIT runner is registered to the same repository before its cache is mounted. Missing or
-  malformed repository identity fails closed; organization-scoped fallback is deliberately absent.
-- Writes autosave during the job; the orchestrator syncs and unmounts on exit. Provisioning is
-  best-effort unless a workflow asserts the mount (see below).
-- Cleanup: `tl fs ls` lists the `github-actions-cache-*` volumes; `tl fs rm <name>` deletes one.
-- Readiness is an authenticated write/read/delete round trip, not merely a mount-table check. A
-  mounted but unauthorized or disconnected TLFS session is detached, given one freshly minted
-  credential retry, and never exported to a job unless that probe succeeds. Attempt logs include
-  only a non-reversible credential fingerprint and expiry, never the credential.
-
-Two reusable actions wrap the common cases — see each `action.yml` for inputs:
-
-```yaml
-# Rust: persist CARGO_HOME + sccache (keep `target` on local disk for parallel jobs).
-- uses: actions-rust-lang/setup-rust-toolchain@v1
-  with: { cache: false }
-- uses: tensorlakeai/tensorlake-github-runners/actions/setup-rust-cache@main
-  with:
-    cache-namespace: rust-release-glibc-2.35-x86_64-unknown-linux-gnu-v2
-    disable-incremental: "true"
-- run: cargo build --locked --release
-```
-
-```yaml
-# uv: store a compatibility-keyed compressed environment archive (avoids small-file reads over FUSE).
-- uses: tensorlakeai/tensorlake-github-runners/actions/setup-uv-cache@main
-  with: { python-version: "3.11", sync-args: --locked }
-- run: uv run --no-sync pytest
-```
-
-To make a cache regression fail loudly instead of silently writing to ephemeral disk, assert the
-mount before use:
-
-```yaml
-- run: |
-    test -n "${TENSORLAKE_CACHE_DIR}" && mountpoint -q "${TENSORLAKE_CACHE_DIR}" \
-      || { echo "::error::TLFS cache not mounted"; exit 1; }
-```
-
-## Running long or heavy jobs
-
-These are the non-obvious requirements for jobs that run for many minutes or do lock-heavy,
-small-file I/O against the cache — keep them if you fork the orchestrator:
-
-- **Supervise, don't stream.** `run_github_runner` launches the runner as a *detached* managed
-  process (`sandbox.start_process`) and polls `sandbox.get_process()` for completion, writing a
-  progress update each poll. The progress updates extend the function's execution timeout so the
-  orchestrator outlives the job. Awaiting a single long-lived `sandbox.run("run.sh")` instead
-  streams the whole job over one connection that drops on long builds — which tears the sandbox down
-  mid-job and surfaces as "runner lost communication".
-- **Mount the cache as root.** The orchestrator mounts via `sudo tl fs mount` so the mount daemon
-  can raise its open-file limit (each open file on the volume pins a descriptor). `tl fs mount` still
-  presents the volume to the invoking `tl-user`. A non-root mount is capped too low and refused.
-- **Match the base-OS glibc to your release target** (see [Runner image](#runner-image)).
-
-## Self-test
-
-`.github/workflows/build-reference.yml` runs on a `tensorlake-small` runner: it lints and builds the
-Python project, runs the tests, exercises the cache actions, and runs Docker's `hello-world` to
-verify the runner's Docker daemon.
+`.github/workflows/canary.yml` runs the action on a Tensorlake runner. It needs this repository
+connected to a Tensorlake project.
