@@ -69,9 +69,21 @@ function prefetchSummary(log) {
 
 // Blocks until writes to the mount are published, so a cache saved at the end
 // of a job survives runner teardown. Returns { status, output }.
+const GUEST = '/usr/local/bin/tensorlake-gha';
+
 function waitForUpload(mountpoint, timeoutSeconds) {
   if (!sudoAvailable()) return { status: 'unavailable', output: 'passwordless sudo is unavailable' };
   spawnSync('sync', [], { stdio: 'ignore', timeout: 60000 });
+  // Runner images with `tensorlake-gha cache-sync` publish through the same
+  // supervisor code as the end of the job; older images use the socket directly.
+  if (fs.existsSync(GUEST) && guestSupportsSync()) {
+    const guest = spawnSync('sudo', ['-n', GUEST, 'cache-sync'], {
+      encoding: 'utf8',
+      timeout: timeoutSeconds * 1000,
+    });
+    if (guest.status === 0) return { status: 'published', output: '' };
+    return { status: 'pending', output: `tensorlake-gha cache-sync exited with ${guest.status ?? guest.signal}` };
+  }
   const script = path.join(__dirname, '..', 'mount-sync.js');
   const result = spawnSync('sudo', ['-n', process.execPath, script, mountpoint, String(timeoutSeconds)], {
     encoding: 'utf8',
@@ -81,6 +93,11 @@ function waitForUpload(mountpoint, timeoutSeconds) {
   if (result.status === 0) return { status: 'published', output };
   if (result.status === 3) return { status: 'unavailable', output };
   return { status: 'pending', output };
+}
+
+function guestSupportsSync() {
+  const help = spawnSync(GUEST, ['--help'], { encoding: 'utf8', timeout: 5000 });
+  return /cache-sync/.test(`${help.stdout || ''}`);
 }
 
 module.exports = { prefetch, prefetchSummary, startPrefetch, waitForPrefetch, waitForUpload };
