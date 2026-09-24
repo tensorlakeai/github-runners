@@ -160,8 +160,18 @@ they build:
   report the upload as published; the runner also publishes the volume when the job ends. Pull
   requests and other branches restore the cache but never write it.
 
-Each save is stored as parallel zstd archives of about 150–200 MB each. Directory timestamps are
-restored last, so Cargo doesn't rerun build scripts.
+Each save is stored as zstd archives of up to 256 MiB, at least four for caches over 256 MiB, so
+the download runs in parallel. Directory timestamps are restored last, so Cargo doesn't rerun
+build scripts.
+
+Measured with this action on `tensorlake-medium`, with random (incompressible) data:
+
+| Cache | Warm restore | Save | Upload wait |
+|---|---:|---:|---:|
+| 250 MB | 2.6–4.1 s | 1.9 s | 3.3 s |
+| 1 GB | 5.9–9.7 s | 4.4 s | 15–20 s |
+
+Without the bulk prefetch, reading the same 1 GB lazily from the volume took about 70 s.
 
 The layout follows a customer's measurements of Rust CI with a 4.7 GB target directory on
 `tensorlake-large`, where they compared these hand-built setups:

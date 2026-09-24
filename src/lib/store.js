@@ -66,6 +66,9 @@ function find(directory) {
 
 async function restore(found) {
   const { entry, manifest } = found;
+  // Concurrent tar processes race to create shared parent directories, and
+  // GNU tar gives up when it loses. Create every directory up front.
+  for (const directory of manifest.leaves || []) fs.mkdirSync(`/${directory}`, { recursive: true });
   await archive.mapLimit(manifest.shards, archive.parallelism(), (shard) =>
     archive.extractArchive(path.join(entry, shard.name), manifest.codec));
   // Parallel extraction touches shared directories; restoring them last puts
@@ -102,6 +105,7 @@ async function save(directory, { language, key, specs, codec = archive.saveCodec
       files: collected.files.length,
       bytes: collected.bytes,
       roots: collected.roots,
+      leaves: leaves(collected.directories),
       shards: shards.map(sized),
       directories: sized(directories),
     };
@@ -116,6 +120,12 @@ async function save(directory, { language, key, specs, codec = archive.saveCodec
     fs.rmSync(temporary, { recursive: true, force: true });
     throw error;
   }
+}
+
+// Directories with no subdirectory; creating them creates all the rest.
+function leaves(directories) {
+  const sorted = [...new Set(directories)].sort();
+  return sorted.filter((directory, index) => !(sorted[index + 1] || '').startsWith(`${directory}/`));
 }
 
 // Keeps the newest entry. Older ones linger briefly in case a concurrent job

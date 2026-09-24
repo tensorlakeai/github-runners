@@ -55,7 +55,8 @@ function prefetch(targets) {
     encoding: 'utf8',
     timeout: PREFETCH_TIMEOUT_SECONDS * 1000,
   });
-  return result.status;
+  const line = `${result.stdout || ''}${result.stderr || ''}`.split('\n').filter((item) => /Prefetched|phases/.test(item));
+  return { status: result.status, detail: line.join(' ').slice(0, 400) };
 }
 
 function prefetchSummary(log) {

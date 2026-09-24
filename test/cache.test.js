@@ -156,6 +156,11 @@ test('balances shards by size', () => {
   assert.equal(shards.length, 3);
   assert.deepEqual(shards.map((shard) => shard.bytes).sort((a, b) => a - b), [700, 800, 900]);
   assert.equal(archive.plan([{ path: 'small', size: 10 }]).length, 1);
+  const mib = 1024 * 1024;
+  const many = (count, size) => Array.from({ length: count }, (_, index) => ({ path: `m${index}`, size }));
+  assert.equal(archive.plan(many(25, 10 * mib)).length, 3, '250 MiB still downloads in parallel');
+  assert.equal(archive.plan(many(100, 10 * mib)).length, 4);
+  assert.equal(archive.plan(many(400, 10 * mib)).length, 16);
 });
 
 // zstd-node is the path on runners without a zstd binary, like today's image.

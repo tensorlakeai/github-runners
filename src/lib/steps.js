@@ -115,8 +115,8 @@ async function restore() {
   } else if (cfg.prefetch) {
     const entries = candidates.filter((item) => item.found.found).map((item) => item.found.entry);
     if (entries.length > 0) {
-      const code = mount.prefetch(entries);
-      core.info(`Prefetch ${code === 0 ? 'finished' : 'skipped'} in ${seconds(started)}.`);
+      const result = mount.prefetch(entries);
+      core.info(`Prefetch ${result && result.status === 0 ? 'finished' : 'skipped'} in ${seconds(started)}. ${result ? result.detail : ''}`);
     }
   }
 

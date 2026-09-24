@@ -12,7 +12,12 @@ const path = require('path');
 const { pipeline } = require('stream/promises');
 const zlib = require('zlib');
 
-const SHARD_TARGET_BYTES = 512 * 1024 * 1024; // uncompressed; ~150-200 MB after zstd -1
+// Uncompressed bytes per shard. Measured on a 1 GB warm restore, 2 and 16
+// shards both prefetched in 6-8 s; small caches still get a few shards so
+// their download runs in parallel.
+const SHARD_TARGET_BYTES = 256 * 1024 * 1024;
+const MIN_SHARD_BYTES = 64 * 1024 * 1024;
+const MIN_SHARDS = 4;
 const MAX_SHARDS = 16;
 const CREATE_ARGS = ['-c', '-f', '-', '-C', '/', '--null', '--no-recursion', '-T', '-'];
 const EXTRACT_ARGS = ['-x', '-p', '-f', '-', '-C', '/'];
@@ -170,9 +175,10 @@ function collect(specs) {
 
 // Largest-first greedy packing keeps shards close in size, so parallel
 // extraction finishes together.
-function plan(files, targetBytes = SHARD_TARGET_BYTES) {
+function plan(files, targetBytes = Number(process.env.TENSORLAKE_CACHE_SHARD_BYTES) || SHARD_TARGET_BYTES) {
   const bytes = files.reduce((total, file) => total + file.size, 0);
-  const count = Math.max(1, Math.min(MAX_SHARDS, Math.ceil(bytes / targetBytes)));
+  const wanted = Math.max(Math.ceil(bytes / targetBytes), Math.min(MIN_SHARDS, Math.floor(bytes / MIN_SHARD_BYTES)));
+  const count = Math.max(1, Math.min(MAX_SHARDS, wanted));
   const shards = Array.from({ length: count }, () => ({ bytes: 0, members: [] }));
   for (const file of [...files].sort((a, b) => b.size - a.size)) {
     let smallest = shards[0];
