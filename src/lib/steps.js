@@ -64,8 +64,18 @@ function units(cfg) {
   return result;
 }
 
+// Manifests only mark a project. When a lockfile exists it records every
+// dependency change, so manifest edits alone don't trigger a new save.
+const MANIFESTS = new Set(['Cargo.toml', 'package.json', 'pyproject.toml']);
+
+function keyFiles(markers) {
+  const locked = markers.filter((file) => !MANIFESTS.has(path.basename(file)));
+  const lockfiles = locked.filter((file) => !/toolchain|go\.mod$|go\.work$/.test(path.basename(file)));
+  return lockfiles.length > 0 ? locked : markers;
+}
+
 function unitKey(cfg, unit) {
-  const files = unit.markers.map((file) => [
+  const files = keyFiles(unit.markers).map((file) => [
     path.relative(cfg.workingDirectory, file),
     config.sha256(fs.readFileSync(file)),
   ]);
@@ -215,4 +225,4 @@ async function save() {
   core.summary(['### Tensorlake cache save', '', '| Cache | Result | Detail |', '|---|---|---|', ...rows, '']);
 }
 
-module.exports = { pre, restore, save, unitKey, units };
+module.exports = { keyFiles, pre, restore, save, unitKey, units };

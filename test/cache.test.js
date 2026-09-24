@@ -381,3 +381,12 @@ test('drops workspace crate artifacts but keeps dependencies', { skip: !hasCargo
   for (const name of [`libserde-${hash}.rlib`, `my_app_utils-${hash}.rlib`, 'serde-1.0']) assert.ok(!skip(deps, name), name);
   assert.ok(!skip(path.join(root, 'elsewhere'), 'my-app'), 'uplifted names only next to deps/');
 });
+
+test('keys on lockfiles, falling back to manifests', () => {
+  const locked = ['/r/Cargo.lock', '/r/Cargo.toml', '/r/crates/a/Cargo.toml', '/r/rust-toolchain.toml'];
+  assert.deepEqual(steps.keyFiles(locked), ['/r/Cargo.lock', '/r/rust-toolchain.toml']);
+  const unlocked = ['/r/Cargo.toml', '/r/rust-toolchain.toml'];
+  assert.deepEqual(steps.keyFiles(unlocked), unlocked);
+  assert.deepEqual(steps.keyFiles(['/r/go.mod', '/r/go.sum']), ['/r/go.mod', '/r/go.sum']);
+  assert.deepEqual(steps.keyFiles(['/r/package.json', '/r/package-lock.json']), ['/r/package-lock.json']);
+});
