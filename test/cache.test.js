@@ -455,6 +455,40 @@ test('drops workspace crate artifacts but keeps dependencies', { skip: !hasCargo
   assert.ok(!skip(path.join(root, 'elsewhere'), 'my-app'), 'uplifted names only next to deps/');
 });
 
+test('keeps a dependency that shares a name with a workspace target', { skip: !hasCargo && 'cargo is not installed' }, () => {
+  const root = path.join(sandbox, 'shared-name');
+  write(
+    path.join(root, 'Cargo.toml'),
+    '[package]\nname = "my-server"\nversion = "0.1.0"\nedition = "2021"\n\n[lib]\nname = "jobserver"\n',
+  );
+  write(path.join(root, 'src', 'lib.rs'), '');
+  write(
+    path.join(root, 'Cargo.lock'),
+    [
+      'version = 4',
+      '',
+      '[[package]]',
+      'name = "jobserver"',
+      'version = "0.1.34"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+      '',
+      '[[package]]',
+      'name = "my-server"',
+      'version = "0.1.0"',
+      '',
+    ].join('\n'),
+  );
+  const debug = path.join(root, 'target', 'debug');
+  const deps = path.join(debug, 'deps');
+  fs.mkdirSync(deps, { recursive: true });
+  const skip = languages.workspaceArtifacts([root]);
+  assert.ok(skip, 'cargo metadata listed the workspace');
+  const hash = '0123456789abcdef';
+  assert.ok(!skip(deps, `libjobserver-${hash}.rlib`), 'dependency rlib');
+  assert.ok(!skip(path.join(debug, '.fingerprint'), `jobserver-${hash}`), 'dependency fingerprint');
+  assert.ok(skip(path.join(debug, '.fingerprint'), `my-server-${hash}`), 'workspace package');
+});
+
 test('keys on lockfiles, falling back to manifests', () => {
   const locked = ['/r/Cargo.lock', '/r/Cargo.toml', '/r/crates/a/Cargo.toml', '/r/rust-toolchain.toml'];
   assert.deepEqual(steps.keyFiles(locked), ['/r/Cargo.lock', '/r/rust-toolchain.toml']);

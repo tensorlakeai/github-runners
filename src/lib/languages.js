@@ -104,12 +104,39 @@ function escape(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Names of the registry and git packages in a Cargo.lock. Path dependencies
+// have no source line and are left out.
+function lockedDependencies(root) {
+  let lockfile;
+  try {
+    lockfile = fs.readFileSync(path.join(root, 'Cargo.lock'), 'utf8');
+  } catch {
+    return [];
+  }
+  const names = [];
+  for (const block of lockfile.split(/^\[\[package\]\]$/m).slice(1)) {
+    const name = /^name = "([^"]+)"$/m.exec(block);
+    if (name && /^source = /m.test(block)) names.push(name[1]);
+  }
+  return names;
+}
+
 // The workspace's own crates rebuild on every run, because checkout gives
 // their sources new mtimes. Their artifacts only make the archive bigger, so
 // only dependencies are kept, as Swatinem/rust-cache does.
+//
+// Artifacts are matched by name only, so a workspace target that shares a
+// name with a dependency, such as a lib named `jobserver`, would also drop
+// that dependency and rebuild everything downstream of it. Those names are
+// kept, along with the workspace artifacts that happen to share them.
 function workspaceArtifacts(roots) {
   const names = new Set();
+  const dependencies = new Set();
   for (const root of roots) {
+    for (const name of lockedDependencies(root)) {
+      dependencies.add(name);
+      dependencies.add(name.replace(/-/g, '_'));
+    }
     const metadata = commandOutput('cargo', ['metadata', '--no-deps', '--format-version', '1', '--offline'], root);
     if (!metadata) continue;
     try {
@@ -123,6 +150,7 @@ function workspaceArtifacts(roots) {
       // Unparseable metadata: keep everything.
     }
   }
+  for (const name of dependencies) names.delete(name);
   if (names.size === 0) return undefined;
   const alternatives = [...names].map(escape).join('|');
   // deps/libapp-0123456789abcdef.rlib, .fingerprint/app-0123456789abcdef/, ...
