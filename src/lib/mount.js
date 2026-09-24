@@ -20,14 +20,14 @@ function sudoAvailable() {
   return spawnSync('sudo', ['-n', 'true'], { stdio: 'ignore', timeout: 5000 }).status === 0;
 }
 
-// Starts a detached prefetch that outlives this step, writing its exit code
-// to `<marker>` when it ends.
-function startPrefetch(target, marker, log) {
+// Starts a detached prefetch of `targets` that outlives this step, writing its
+// exit code to `<marker>` when it ends.
+function startPrefetch(targets, marker, log) {
   const tl = tlBinary();
   if (!tl || !sudoAvailable()) return false;
-  const script = 'timeout "$1" sudo -n "$2" fs prefetch "$3"; echo $? > "$4.tmp" && mv "$4.tmp" "$4"';
+  const script = 'marker="$3"; timeout "$1" sudo -n "$2" fs prefetch "${@:4}"; echo $? > "$marker.tmp" && mv "$marker.tmp" "$marker"';
   const output = fs.openSync(log, 'a');
-  const child = spawn('bash', ['-c', script, 'prefetch', String(PREFETCH_TIMEOUT_SECONDS), tl, target, marker], {
+  const child = spawn('bash', ['-c', script, 'prefetch', String(PREFETCH_TIMEOUT_SECONDS), tl, marker, ...targets], {
     detached: true,
     stdio: ['ignore', output, output],
   });

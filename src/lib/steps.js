@@ -82,13 +82,20 @@ function unitKey(cfg, unit) {
   return config.sha256(JSON.stringify([config.LAYOUT, unit.language, cfg.key, files, unit.spec.version()]));
 }
 
-// Before any step: warm the scope's archives on the mount in the background,
-// so the download overlaps checkout and toolchain setup.
+// Before any step: warm the entries this job would restore in the background,
+// so the download overlaps checkout and toolchain setup. Languages aren't known
+// before checkout, so this covers every language saved for the job.
 function pre() {
   const cfg = config.load();
   if (!cfg.root || !cfg.prefetch || !fs.existsSync(cfg.scopeDirectory)) return;
+  const entries = fs
+    .readdirSync(cfg.scopeDirectory)
+    .map((language) => store.findFirst(path.join(cfg.scopeDirectory, language), cfg.refs))
+    .filter((found) => found.found)
+    .map((found) => found.entry);
+  if (entries.length === 0) return;
   const files = prefetchFiles(cfg);
-  if (mount.startPrefetch(cfg.scopeDirectory, files.done, files.log)) {
+  if (mount.startPrefetch(entries, files.done, files.log)) {
     fs.writeFileSync(files.started, '');
     core.info('Started prefetching the Tensorlake cache in the background.');
   }
@@ -117,7 +124,7 @@ async function restore() {
   }
 
   const started = Date.now();
-  const candidates = selected.map((unit) => ({ unit, found: store.find(unit.directory) }));
+  const candidates = selected.map((unit) => ({ unit, found: store.findFirst(unit.directory, cfg.refs) }));
   const files = prefetchFiles(cfg);
   if (fs.existsSync(files.started)) {
     const code = await mount.waitForPrefetch(files.done);
@@ -150,7 +157,9 @@ async function restore() {
     }
     unit.spec.afterRestore(core);
     restored[unit.language] = found.manifest.key;
-    const detail = `${size(found.manifest.bytes)} in ${found.manifest.shards.length} shard(s), saved ${found.manifest.created}`;
+    if (found.ref === cfg.ref) store.touch(unit.directory, cfg.ref);
+    const source = found.ref === cfg.ref ? 'this ref' : found.ref;
+    const detail = `${size(found.manifest.bytes)} in ${found.manifest.shards.length} shard(s) from ${source}, saved ${found.manifest.created}`;
     core.info(`${unit.language}: restored ${detail} in ${seconds(unitStarted)}.`);
     rows.push(`| ${unit.language} | hit | ${detail} |`);
   }
@@ -164,7 +173,7 @@ async function save() {
   if (core.getState('enabled') !== 'true') return;
   const cfg = config.load();
   if (!cfg.root) return;
-  const decision = config.saveDecision(cfg.save, cfg.defaultBranch);
+  const decision = config.saveDecision(cfg.save);
   if (!decision.save) {
     core.info(`Not saving the Tensorlake cache: ${decision.reason}.`);
     return;
@@ -189,13 +198,14 @@ async function save() {
   for (const unit of units(cfg).filter((item) => selected.includes(item.language))) {
     const key = unitKey(cfg, unit);
     if (restored[unit.language] === key) {
-      core.info(`${unit.language}: unchanged since the restored entry; not saving.`);
+      core.info(`${unit.language}: dependencies unchanged since the restored entry; not saving.`);
       rows.push(`| ${unit.language} | unchanged | |`);
       continue;
     }
     if (unit.spec.beforeSave) unit.spec.beforeSave(core);
     const unitStarted = Date.now();
     const result = await store.save(unit.directory, {
+      ref: cfg.ref,
       language: unit.language,
       key,
       specs: unit.spec.paths(unit.markers),
@@ -206,8 +216,9 @@ async function save() {
       continue;
     }
     saved += 1;
+    store.expire(unit.directory, [cfg.defaultRef, cfg.ref]);
     const detail = `${size(result.manifest.bytes)} as ${size(result.stored)} in ${result.manifest.shards.length} shard(s)`;
-    core.info(`${unit.language}: saved ${detail} in ${seconds(unitStarted)}.`);
+    core.info(`${unit.language}: saved ${detail} to ${cfg.ref} in ${seconds(unitStarted)}.`);
     rows.push(`| ${unit.language} | saved | ${detail} |`);
   }
 

@@ -1,8 +1,8 @@
 name: Tensorlake cache
 description: >-
   Persistent Rust, Node.js, Go, and Python caches for jobs on Tensorlake
-  runners. Restores to local disk before the build and saves on the default
-  branch after it.
+  runners. Restores to local disk before the build and saves to the job's
+  branch or pull request after it.
 author: Tensorlake
 branding:
   icon: zap
@@ -33,12 +33,13 @@ inputs:
     default: .
   save:
     description: >-
-      auto saves only on pushes to the default branch when dependencies or
-      toolchains changed; true always saves; false never saves.
+      auto saves to the job's own branch or pull request when dependencies or
+      toolchains changed, except in merge queue runs; true also saves in merge
+      queue runs; false never saves.
     required: false
     default: auto
   default-branch:
-    description: Branch whose runs save the cache when save is auto.
+    description: Branch whose cache other branches fall back to. It never expires.
     required: false
     default: ${{ github.event.repository.default_branch }}
   prefetch:

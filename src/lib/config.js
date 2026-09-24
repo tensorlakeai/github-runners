@@ -7,7 +7,7 @@ const path = require('path');
 const core = require('./core');
 
 // Bump to abandon every existing entry after an incompatible layout change.
-const LAYOUT = 'tensorlake-cache-v1';
+const LAYOUT = 'tensorlake-cache-v2';
 const LANGUAGES = ['rust', 'node', 'go', 'python'];
 
 function sha256(value) {
@@ -56,28 +56,30 @@ function readEvent() {
   }
 }
 
-// Only default-branch runs publish: pull requests restore but never write, so
-// untrusted branches cannot seed what the default branch later restores.
-function saveDecision(mode, defaultBranchInput) {
+// Every branch and pull request saves to its own ref; merge queue refs are
+// temporary, so those runs only restore.
+function saveDecision(mode) {
   if (mode === 'true') return { save: true, reason: 'save: true' };
   if (mode === 'false') return { save: false, reason: 'save: false' };
   if (mode !== 'auto') throw new Error(`Input save must be auto, true, or false, got "${mode}".`);
-
   const event = process.env.GITHUB_EVENT_NAME || '';
-  if (event.startsWith('pull_request') || event === 'merge_group') {
-    return { save: false, reason: `${event} runs only restore` };
-  }
-  const defaultBranch = defaultBranchInput || readEvent().repository?.default_branch || '';
-  if (!defaultBranch) return { save: false, reason: 'default branch unknown' };
-  const ref = process.env.GITHUB_REF || '';
-  if (ref !== `refs/heads/${defaultBranch}`) {
-    return { save: false, reason: `only ${defaultBranch} saves (this run is ${ref || 'unknown'})` };
-  }
-  return { save: true, reason: `${defaultBranch} branch` };
+  if (event === 'merge_group') return { save: false, reason: 'merge queue runs only restore' };
+  if (!process.env.GITHUB_REF) return { save: false, reason: 'the run has no ref' };
+  return { save: true, reason: process.env.GITHUB_REF };
+}
+
+// Where a job looks for a cache, in order: its own ref, a pull request's base
+// branch, then the default branch. It only ever writes to its own ref.
+function refs(defaultBranch) {
+  const own = process.env.GITHUB_REF || '';
+  const base = process.env.GITHUB_BASE_REF ? `refs/heads/${process.env.GITHUB_BASE_REF}` : '';
+  const fallback = defaultBranch ? `refs/heads/${defaultBranch}` : '';
+  return [...new Set([own, base, fallback].filter(Boolean))];
 }
 
 function load() {
   const root = cacheRoot();
+  const defaultBranch = core.getInput('default-branch', '') || readEvent().repository?.default_branch || '';
   const workingDirectory = path.resolve(process.env.GITHUB_WORKSPACE || process.cwd(), core.getInput('working-directory', '.'));
   const key = core.getInput('key', '');
   const languages = parseLanguages(core.getInput('languages', 'auto'));
@@ -100,10 +102,12 @@ function load() {
     paths: core.getInput('paths', '').split('\n').map((item) => item.trim()).filter(Boolean),
     workingDirectory,
     save: core.getInput('save', 'auto').toLowerCase(),
-    defaultBranch: core.getInput('default-branch', ''),
+    ref: process.env.GITHUB_REF || '',
+    refs: refs(defaultBranch),
+    defaultRef: defaultBranch ? `refs/heads/${defaultBranch}` : '',
     prefetch: core.getBooleanInput('prefetch', true),
     syncTimeout,
   };
 }
 
-module.exports = { LANGUAGES, LAYOUT, load, parseLanguages, saveDecision, sha256 };
+module.exports = { LANGUAGES, LAYOUT, load, parseLanguages, refs, saveDecision, sha256 };

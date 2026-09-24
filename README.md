@@ -153,12 +153,14 @@ they build:
 
 - **Before the job's first step**, the action starts downloading this job's cache from the volume
   in the background, while checkout and toolchain setup run.
-- **At the cache step**, the archives are unpacked to local disk in parallel. The cache is
-  restored from the newest save of the same workflow job, whichever branch it came from.
-- **After the job succeeds**, the cache is saved again only if the job ran on the default branch
-  and the lockfiles or toolchain changed. It then waits, up to `sync-timeout`, for the mount to
-  report the upload as published; the runner also publishes the volume when the job ends. Pull
-  requests and other branches restore the cache but never write it.
+- **At the cache step**, the archives are unpacked to local disk in parallel. Each branch and
+  pull request has its own cache. A job restores its own ref's newest save; without one, a pull
+  request falls back to its base branch, and anything else falls back to the default branch.
+- **After the job succeeds**, the cache is saved to the job's own ref, but only if the lockfiles
+  or toolchain differ from what it restored. A pull request that doesn't change dependencies
+  reuses the default branch's cache and writes nothing. The action then waits, up to
+  `sync-timeout`, for the mount to report the upload as published; the runner also publishes the
+  volume when the job ends. Merge queue runs restore but don't save.
 
 Each save is stored as zstd archives of up to 256 MiB, at least four for caches over 256 MiB, so
 the download runs in parallel. Directory timestamps are restored last, so Cargo doesn't rerun
@@ -194,7 +196,8 @@ of many small files.
 | `paths` | | Extra files or directories to cache, one per line, relative to `working-directory` or starting with `~/`. |
 | `key` | | Separates caches for jobs that build different things, such as matrix entries. |
 | `working-directory` | `.` | Where to search for lockfiles. |
-| `save` | `auto` | `auto` saves on the default branch when dependencies changed; `true` saves on any branch; `false` never saves. |
+| `save` | `auto` | `auto` saves to the job's own branch or pull request when dependencies changed, except in merge queue runs; `true` also saves in merge queue runs; `false` never saves. |
+| `default-branch` | the repository's | The fallback cache for branches, and never expired. |
 | `prefetch` | `true` | Download the cache in bulk before restoring it. |
 | `sync-timeout` | `180` | Seconds to wait for the upload after saving; `0` leaves it to the runner's end-of-job upload. |
 
@@ -204,11 +207,14 @@ from an earlier run.
 ## Cache scope and safety
 
 - Jobs of a repository share one volume. Keep secrets out of cached paths.
-- Pull request jobs don't save through this action, but the volume is mounted read-write, so code
+- A branch or pull request writes only to its own cache, so it can't change what the default
+  branch restores through this action. The volume itself is mounted read-write, though, so code
   in a pull request can still write to it directly.
+- Caches of branches and pull requests are deleted after a week without use. The default
+  branch's cache is kept.
 - Without a cache volume (another runner, or a mount that failed its health check), the step logs
   a notice and the job builds normally. A failed restore or save never fails the job.
-- To start over, change `key`, or delete the `tensorlake-cache-v1` directory on the volume from a
+- To start over, change `key`, or delete the `tensorlake-cache-v2` directory on the volume from a
   job.
 
 ## Development

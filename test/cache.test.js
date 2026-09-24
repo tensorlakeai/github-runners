@@ -39,7 +39,7 @@ function readCommands(file) {
 
 // Simulates one job: a fresh home, workspace and runner files, sharing the
 // cache volume across calls.
-function job({ event = 'push', ref = 'refs/heads/main', inputs = {} } = {}) {
+function job({ event = 'push', ref = 'refs/heads/main', base = '', inputs = {} } = {}) {
   const id = fs.mkdtempSync(path.join(sandbox, 'job-'));
   const home = path.join(id, 'home');
   const workspace = path.join(id, 'workspace');
@@ -60,6 +60,7 @@ function job({ event = 'push', ref = 'refs/heads/main', inputs = {} } = {}) {
     GITHUB_EVENT_NAME: event,
     GITHUB_EVENT_PATH: eventPath,
     GITHUB_REF: ref,
+    ...(base ? { GITHUB_BASE_REF: base } : {}),
     GITHUB_ENV: path.join(id, 'env'),
     GITHUB_PATH: path.join(id, 'path'),
     GITHUB_OUTPUT: path.join(id, 'output'),
@@ -97,10 +98,16 @@ function rustProject(current) {
   return path.join(current.workspace, 'target', 'debug', 'build');
 }
 
-function entries(language) {
+function unitDirectory(language) {
   const scopes = path.join(sandbox, 'volume', config.LAYOUT);
   const [scope] = fs.readdirSync(scopes);
-  return fs.readdirSync(path.join(scopes, scope, language)).filter((name) => /^\d+-/.test(name));
+  return path.join(scopes, scope, language);
+}
+
+function entries(language, ref = 'refs/heads/main') {
+  const directory = store.refDirectory(unitDirectory(language), ref);
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory).filter((name) => /^\d+-/.test(name));
 }
 
 beforeEach(() => {
@@ -134,20 +141,30 @@ test('parses language lists and aliases', () => {
   assert.throws(() => config.parseLanguages('cobol'), /Unsupported language/);
 });
 
-test('saves only from the default branch', () => {
+test('saves from every ref except merge queue runs', () => {
   const cases = [
     ['push', 'refs/heads/main', 'auto', true],
-    ['push', 'refs/heads/feature', 'auto', false],
-    ['pull_request', 'refs/pull/1/merge', 'auto', false],
-    ['pull_request_target', 'refs/heads/main', 'auto', false],
-    ['schedule', 'refs/heads/main', 'auto', true],
-    ['pull_request', 'refs/pull/1/merge', 'true', true],
+    ['push', 'refs/heads/feature', 'auto', true],
+    ['pull_request', 'refs/pull/1/merge', 'auto', true],
+    ['merge_group', 'refs/heads/gh-readonly-queue/main/pr-1', 'auto', false],
+    ['merge_group', 'refs/heads/gh-readonly-queue/main/pr-1', 'true', true],
     ['push', 'refs/heads/main', 'false', false],
   ];
   for (const [event, ref, mode, expected] of cases) {
     job({ event, ref });
-    assert.equal(config.saveDecision(mode, '').save, expected, `${event} ${ref} ${mode}`);
+    assert.equal(config.saveDecision(mode).save, expected, `${event} ${ref} ${mode}`);
   }
+});
+
+test('looks up the own ref, then the base branch, then the default branch', () => {
+  job({ event: 'pull_request', ref: 'refs/pull/7/merge', base: 'release/1.2' });
+  assert.deepEqual(config.refs('main'), ['refs/pull/7/merge', 'refs/heads/release/1.2', 'refs/heads/main']);
+  job({ event: 'pull_request', ref: 'refs/pull/8/merge', base: 'main' });
+  assert.deepEqual(config.refs('main'), ['refs/pull/8/merge', 'refs/heads/main']);
+  job({ ref: 'refs/heads/main' });
+  assert.deepEqual(config.refs('main'), ['refs/heads/main']);
+  job({ ref: 'refs/heads/feature' });
+  assert.deepEqual(config.refs(''), ['refs/heads/feature']);
 });
 
 test('balances shards by size', () => {
@@ -213,19 +230,76 @@ test('skips unchanged saves and refreshes when the lockfile changes', async () =
   assert.equal(entries('rust').length, 2, 'the previous entry is kept briefly for concurrent readers');
 });
 
-test('pull request jobs restore but never write', async () => {
+test('pull requests start from the default branch and save to their own ref', async () => {
   const main = job();
   rustProject(main);
   await main.restore();
   await main.save();
-  const before = entries('rust');
+  const mainEntries = entries('rust');
 
-  const pr = job({ event: 'pull_request', ref: 'refs/pull/7/merge' });
+  // Unchanged dependencies: restore main's entry and write nothing.
+  const pr = job({ event: 'pull_request', ref: 'refs/pull/7/merge', base: 'main' });
   rustProject(pr);
-  write(path.join(pr.workspace, 'Cargo.lock'), 'version = 4\n# pr change\n');
   assert.equal((await pr.restore()).restored, 'rust');
   await pr.save();
-  assert.deepEqual(entries('rust'), before);
+  assert.deepEqual(entries('rust', 'refs/pull/7/merge'), []);
+
+  // A dependency change saves once, to the pull request's ref only.
+  const changed = job({ event: 'pull_request', ref: 'refs/pull/7/merge', base: 'main' });
+  rustProject(changed);
+  write(path.join(changed.workspace, 'Cargo.lock'), 'version = 4\n# pr change\n');
+  await changed.restore();
+  await changed.save();
+  assert.equal(entries('rust', 'refs/pull/7/merge').length, 1);
+  assert.deepEqual(entries('rust'), mainEntries, 'main is never written by a pull request');
+
+  // The next run of the pull request restores its own entry and doesn't save again.
+  const next = job({ event: 'pull_request', ref: 'refs/pull/7/merge', base: 'main' });
+  rustProject(next);
+  write(path.join(next.workspace, 'Cargo.lock'), 'version = 4\n# pr change\n');
+  assert.equal((await next.restore()).restored, 'rust');
+  await next.save();
+  assert.equal(entries('rust', 'refs/pull/7/merge').length, 1);
+  assert.match(fs.readFileSync(process.env.GITHUB_STEP_SUMMARY, 'utf8'), /from this ref/);
+
+  // The default branch never restores another ref's entry.
+  const later = job();
+  rustProject(later);
+  await later.restore();
+  assert.match(fs.readFileSync(process.env.GITHUB_STEP_SUMMARY, 'utf8'), /from this ref/);
+});
+
+test('merge queue runs restore without saving', async () => {
+  const main = job();
+  rustProject(main);
+  await main.restore();
+  await main.save();
+  const queue = job({ event: 'merge_group', ref: 'refs/heads/gh-readonly-queue/main/pr-7-abc' });
+  rustProject(queue);
+  write(path.join(queue.workspace, 'Cargo.lock'), 'version = 4\n# queued change\n');
+  assert.equal((await queue.restore()).restored, 'rust');
+  await queue.save();
+  assert.deepEqual(entries('rust', 'refs/heads/gh-readonly-queue/main/pr-7-abc'), []);
+});
+
+test('expires refs unused for a week, never the default branch', async () => {
+  for (const ref of ['refs/heads/main', 'refs/heads/stale', 'refs/heads/active']) {
+    const current = job({ ref });
+    rustProject(current);
+    // Each branch changes dependencies, so each saves its own entry.
+    write(path.join(current.workspace, 'Cargo.lock'), `version = 4\n# ${ref}\n`);
+    await current.restore();
+    await current.save();
+  }
+  const directory = unitDirectory('rust');
+  const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  for (const ref of ['refs/heads/main', 'refs/heads/stale']) {
+    fs.utimesSync(path.join(store.refDirectory(directory, ref), 'latest'), old, old);
+  }
+  store.expire(directory, ['refs/heads/main', 'refs/heads/active']);
+  assert.equal(entries('rust', 'refs/heads/main').length, 1);
+  assert.equal(entries('rust', 'refs/heads/active').length, 1);
+  assert.deepEqual(entries('rust', 'refs/heads/stale'), []);
 });
 
 test('treats a partially uploaded entry as a miss', async () => {
@@ -234,8 +308,7 @@ test('treats a partially uploaded entry as a miss', async () => {
   await first.restore();
   await first.save();
   const [name] = entries('rust');
-  const scopes = path.join(sandbox, 'volume', config.LAYOUT);
-  const entry = path.join(scopes, fs.readdirSync(scopes)[0], 'rust', name);
+  const entry = path.join(store.refDirectory(unitDirectory('rust'), 'refs/heads/main'), name);
   const shard = fs.readdirSync(entry).find((file) => file.startsWith('shard-'));
   fs.truncateSync(path.join(entry, shard), 3);
 
