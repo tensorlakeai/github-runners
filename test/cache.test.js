@@ -440,6 +440,7 @@ test('drops workspace crate artifacts but keeps dependencies', { skip: !hasCargo
   const root = path.join(sandbox, 'crate');
   write(path.join(root, 'Cargo.toml'), '[package]\nname = "my-app"\nversion = "0.1.0"\nedition = "2021"\n');
   write(path.join(root, 'src', 'main.rs'), 'fn main() {}\n');
+  write(path.join(root, 'build.rs'), 'fn main() {}\n');
   const debug = path.join(root, 'target', 'debug');
   fs.mkdirSync(path.join(debug, 'deps'), { recursive: true });
   // cargo needs the real toolchain home to answer metadata.
@@ -453,6 +454,9 @@ test('drops workspace crate artifacts but keeps dependencies', { skip: !hasCargo
   assert.ok(skip(debug, 'my-app'), 'uplifted binary');
   for (const name of [`libserde-${hash}.rlib`, `my_app_utils-${hash}.rlib`, 'serde-1.0']) assert.ok(!skip(deps, name), name);
   assert.ok(!skip(path.join(root, 'elsewhere'), 'my-app'), 'uplifted names only next to deps/');
+  // A dependency's compiled build script, which the workspace's build.rs shares a target name with.
+  const script = path.join(debug, 'build', `libc-${hash}`);
+  for (const name of [`build_script_build-${hash}`, `build_script_build-${hash}.d`, 'build-script-build']) assert.ok(!skip(script, name), name);
 });
 
 test('keys on lockfiles, falling back to manifests', () => {

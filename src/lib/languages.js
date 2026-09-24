@@ -114,7 +114,12 @@ function workspaceArtifacts(roots) {
     if (!metadata) continue;
     try {
       for (const pkg of JSON.parse(metadata).packages) {
-        for (const name of [pkg.name, ...pkg.targets.map((target) => target.name)]) {
+        // Every build script's target is named build-script-build, so its name
+        // would match each dependency's compiled script, and a missing script
+        // rebuilds the crate and all its dependents. The package name already
+        // covers the workspace's own build/<crate>-<hash>/ directories.
+        const targets = pkg.targets.filter((target) => !target.kind.includes('custom-build'));
+        for (const name of [pkg.name, ...targets.map((target) => target.name)]) {
           names.add(name);
           names.add(name.replace(/-/g, '_'));
         }
@@ -169,7 +174,9 @@ const SPECS = {
       if (fs.existsSync(path.join(bin, 'rustup')) || fs.existsSync(path.join(bin, 'cargo'))) core.addPath(bin);
     },
     version() {
-      return commandOutput('rustc', ['-vV']);
+      // The revision changes the key when the archived files change, so
+      // entries saved without dependencies' build scripts are replaced.
+      return `${commandOutput('rustc', ['-vV'])}\narchive-revision: 2`;
     },
   },
   node: {
