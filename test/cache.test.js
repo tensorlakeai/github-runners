@@ -360,3 +360,24 @@ test('caches a Rust crate without a committed Cargo.lock', async () => {
   assert.equal((await current.restore()).restored, 'rust');
   assert.ok(fs.existsSync(path.join(current.workspace, 'target', 'debug', 'deps', 'liblib.rlib')));
 });
+
+const hasCargo = require('node:child_process').spawnSync('cargo', ['--version']).status === 0;
+
+test('drops workspace crate artifacts but keeps dependencies', { skip: !hasCargo && 'cargo is not installed' }, () => {
+  const root = path.join(sandbox, 'crate');
+  write(path.join(root, 'Cargo.toml'), '[package]\nname = "my-app"\nversion = "0.1.0"\nedition = "2021"\n');
+  write(path.join(root, 'src', 'main.rs'), 'fn main() {}\n');
+  const debug = path.join(root, 'target', 'debug');
+  fs.mkdirSync(path.join(debug, 'deps'), { recursive: true });
+  // cargo needs the real toolchain home to answer metadata.
+  const skip = languages.workspaceArtifacts([root]);
+  assert.ok(skip, 'cargo metadata listed the workspace');
+  const hash = '0123456789abcdef';
+  const deps = path.join(debug, 'deps');
+  for (const name of [`my_app-${hash}`, `my_app-${hash}.d`, `libmy_app-${hash}.rlib`]) assert.ok(skip(deps, name), name);
+  assert.ok(skip(path.join(debug, '.fingerprint'), `my-app-${hash}`));
+  assert.ok(skip(path.join(debug, 'build'), `my-app-${hash}`));
+  assert.ok(skip(debug, 'my-app'), 'uplifted binary');
+  for (const name of [`libserde-${hash}.rlib`, `my_app_utils-${hash}.rlib`, 'serde-1.0']) assert.ok(!skip(deps, name), name);
+  assert.ok(!skip(path.join(root, 'elsewhere'), 'my-app'), 'uplifted names only next to deps/');
+});

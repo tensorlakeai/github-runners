@@ -100,6 +100,39 @@ function toolPath(command, args, cwd, fallback) {
   return reported && path.isAbsolute(reported) && reported !== 'undefined' ? reported : fallback;
 }
 
+function escape(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// The workspace's own crates rebuild on every run, because checkout gives
+// their sources new mtimes. Their artifacts only make the archive bigger, so
+// only dependencies are kept, as Swatinem/rust-cache does.
+function workspaceArtifacts(roots) {
+  const names = new Set();
+  for (const root of roots) {
+    const metadata = commandOutput('cargo', ['metadata', '--no-deps', '--format-version', '1', '--offline'], root);
+    if (!metadata) continue;
+    try {
+      for (const pkg of JSON.parse(metadata).packages) {
+        for (const name of [pkg.name, ...pkg.targets.map((target) => target.name)]) {
+          names.add(name);
+          names.add(name.replace(/-/g, '_'));
+        }
+      }
+    } catch {
+      // Unparseable metadata: keep everything.
+    }
+  }
+  if (names.size === 0) return undefined;
+  const alternatives = [...names].map(escape).join('|');
+  // deps/libapp-0123456789abcdef.rlib, .fingerprint/app-0123456789abcdef/, ...
+  const hashed = new RegExp(`^(lib)?(${alternatives})-[0-9a-f]{16}(\\..+)?$`);
+  // Uplifted copies next to deps/: target/debug/app, libapp.rlib, app.d
+  const uplifted = new RegExp(`^(lib)?(${alternatives})(\\.(rlib|rmeta|so|a|d|dylib))?$`);
+  return (directory, name) =>
+    hashed.test(name) || (uplifted.test(name) && fs.existsSync(path.join(directory, 'deps')));
+}
+
 // Each spec lists local directories. They are archived after the build and
 // extracted to local disk before it, so nothing reads the mount while tools run.
 const SPECS = {
@@ -128,7 +161,7 @@ const SPECS = {
         // Restoring the toolchain saves the rustup install on every job.
         { path: rustupHome, excludeTop: ['downloads', 'tmp'] },
         // Incremental data is disabled above and only bloats the archive.
-        ...targets.map((target) => ({ path: target, excludeAny: ['incremental'] })),
+        ...targets.map((target) => ({ path: target, excludeAny: ['incremental'], skip: workspaceArtifacts(roots) })),
       ];
     },
     afterRestore(core) {
@@ -223,4 +256,4 @@ const SPECS = {
   },
 };
 
-module.exports = { MARKERS, SPECS, detect, findMarkers };
+module.exports = { MARKERS, SPECS, detect, findMarkers, workspaceArtifacts };

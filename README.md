@@ -138,7 +138,7 @@ builds something different its own `key`:
 
 | Language | Detected from | Cached |
 |---|---|---|
-| Rust | `Cargo.lock`, or `Cargo.toml` without one | Cargo registry and git dependencies, installed binaries, the rustup toolchain, and `target` (or `CARGO_TARGET_DIR`) without incremental data. Sets `CARGO_INCREMENTAL=0`. |
+| Rust | `Cargo.lock`, or `Cargo.toml` without one | Cargo registry and git dependencies, installed binaries, the rustup toolchain, and `target` (or `CARGO_TARGET_DIR`) without incremental data or the workspace's own crates, which rebuild on every run. Sets `CARGO_INCREMENTAL=0`. |
 | Node.js | `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, or `package.json` | The package manager's download store, as reported by `npm`, `pnpm`, `yarn` or `bun`. `node_modules` is rebuilt from it. |
 | Go | `go.mod` | The module cache (`GOMODCACHE`), the build cache (`GOCACHE`) and the golangci-lint cache. |
 | Python | `uv.lock`, `poetry.lock`, `requirements*.txt`, `pyproject.toml` | The uv cache and uv-installed Pythons, the pip cache and the Poetry cache. |

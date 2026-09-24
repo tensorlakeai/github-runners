@@ -154,6 +154,7 @@ function collect(specs) {
       for (const entry of entries) {
         if (entry.name.includes('\0')) continue;
         const full = path.join(directory, entry.name);
+        if (spec.skip && spec.skip(directory, entry.name)) continue;
         if (entry.isDirectory()) {
           if ((depth === 0 && excludeTop.has(entry.name)) || excludeAny.has(entry.name)) continue;
           visit(full, depth + 1);
