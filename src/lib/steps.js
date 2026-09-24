@@ -216,7 +216,11 @@ async function save() {
       continue;
     }
     saved += 1;
-    store.expire(unit.directory, [cfg.defaultRef, cfg.ref]);
+    try {
+      store.expire(unit.directory, [cfg.defaultRef, cfg.ref]);
+    } catch (error) {
+      core.info(`${unit.language}: skipped expiring old branch caches (${error.message}).`);
+    }
     const detail = `${size(result.manifest.bytes)} as ${size(result.stored)} in ${result.manifest.shards.length} shard(s)`;
     core.info(`${unit.language}: saved ${detail} to ${cfg.ref} in ${seconds(unitStarted)}.`);
     rows.push(`| ${unit.language} | saved | ${detail} |`);

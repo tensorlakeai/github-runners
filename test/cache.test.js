@@ -463,3 +463,22 @@ test('keys on lockfiles, falling back to manifests', () => {
   assert.deepEqual(steps.keyFiles(['/r/go.mod', '/r/go.sum']), ['/r/go.mod', '/r/go.sum']);
   assert.deepEqual(steps.keyFiles(['/r/package.json', '/r/package-lock.json']), ['/r/package-lock.json']);
 });
+
+test('a save that succeeded survives failing cleanup', async () => {
+  const directory = path.join(sandbox, 'unit');
+  const ref = 'refs/heads/main';
+  const cached = path.join(sandbox, 'cached');
+  write(path.join(cached, 'file'), 'data');
+  const first = await store.save(directory, { ref, language: 'custom', key: 'a'.repeat(64), specs: [{ path: cached }] });
+  assert.ok(first.saved);
+  // Listing the ref directory fails, as it did with a mount's EIO, while writes succeed.
+  const refDirectory = store.refDirectory(directory, ref);
+  fs.chmodSync(refDirectory, 0o300);
+  try {
+    const second = await store.save(directory, { ref, language: 'custom', key: 'b'.repeat(64), specs: [{ path: cached }] });
+    assert.ok(second.saved);
+  } finally {
+    fs.chmodSync(refDirectory, 0o755);
+  }
+  assert.equal(store.find(refDirectory).manifest.key, 'b'.repeat(64));
+});

@@ -172,7 +172,13 @@ async function save(base, { ref, language, key, specs, codec = archive.saveCodec
     const name = `${now}-${key.slice(0, 12)}`;
     fs.renameSync(temporary, path.join(directory, name));
     writeDurable(path.join(directory, LATEST), `${name}\n`);
-    prune(directory, name, now);
+    // The entry is complete and visible; cleaning up older ones is best effort
+    // and must not turn this save into a failure.
+    try {
+      prune(directory, name, now);
+    } catch {
+      // Older entries are removed by a later save.
+    }
     const stored = manifest.shards.reduce((total, shard) => total + shard.size, manifest.directories.size);
     return { saved: true, name, manifest, stored };
   } catch (error) {
