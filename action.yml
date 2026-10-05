@@ -27,6 +27,13 @@ inputs:
       build different things, for example the target triple.
     required: false
     default: ""
+  cache-owner:
+    description: >-
+      Share an existing job's cache in this repository. Use workflow.yml/job-id
+      and the same key and working-directory as that job. Branch isolation is
+      preserved. Leave empty to use this workflow and job.
+    required: false
+    default: ""
   working-directory:
     description: Directory to search for lockfiles.
     required: false

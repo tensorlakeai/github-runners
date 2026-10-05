@@ -167,6 +167,60 @@ test('looks up the own ref, then the base branch, then the default branch', () =
   assert.deepEqual(config.refs(''), ['refs/heads/feature']);
 });
 
+test('cache-owner reuses the existing scope and keeps repository and build keys isolated', () => {
+  job({ inputs: { key: 'release-linux' } });
+  const existing = config.load().scope;
+  const legacy = config.sha256(JSON.stringify(['acme/app', 'acme/app/.github/workflows/ci.yml', 'build', '', 'release-linux'])).slice(0, 20);
+  assert.equal(existing, legacy, 'default scopes remain compatible with existing entries');
+
+  job({ inputs: { 'cache-owner': 'ci.yml/build', key: 'release-linux' } });
+  process.env.GITHUB_WORKFLOW_REF = 'acme/app/.github/workflows/publish.yml@refs/heads/main';
+  process.env.GITHUB_JOB = 'helper';
+  assert.equal(config.load().scope, existing);
+
+  process.env.INPUT_KEY = 'release-musl';
+  assert.notEqual(config.load().scope, existing, 'different build keys stay isolated');
+  process.env.INPUT_KEY = 'release-linux';
+  process.env.GITHUB_REPOSITORY = 'acme/other';
+  assert.notEqual(config.load().scope, existing, 'cache-owner cannot cross repositories');
+});
+
+test('rejects malformed cache owners', () => {
+  for (const owner of ['../ci.yml/build', 'acme/app/ci.yml/build', 'ci.yml', 'ci.yml/../build', 'ci.yml/1build']) {
+    job({ inputs: { 'cache-owner': owner } });
+    assert.throws(() => config.load(), /cache-owner must be/);
+  }
+  job({ inputs: { 'cache-owner': 'ci.yml/build' } });
+  delete process.env.GITHUB_REPOSITORY;
+  assert.throws(() => config.load(), /requires GITHUB_REPOSITORY/);
+});
+
+test('another workflow restores the owner cache and saves only to its own branch', async () => {
+  const main = job({ inputs: { key: 'release-linux' } });
+  rustProject(main);
+  const dependency = path.join('target', 'debug', 'deps', 'libserde.rlib');
+  write(path.join(main.workspace, dependency), 'built by the owner workflow');
+  await main.restore();
+  await main.save();
+  const mainEntries = entries('rust');
+
+  // Fresh runners use the same absolute repository/home paths. Remove the
+  // build output and switch workflow identity without changing those paths.
+  fs.rmSync(path.join(main.workspace, 'target'), { recursive: true });
+  process.env.GITHUB_WORKFLOW_REF = 'acme/app/.github/workflows/publish.yml@refs/pull/9/merge';
+  process.env.GITHUB_JOB = 'helper';
+  process.env.GITHUB_EVENT_NAME = 'pull_request';
+  process.env.GITHUB_REF = 'refs/pull/9/merge';
+  process.env.GITHUB_BASE_REF = 'main';
+  process.env['INPUT_CACHE-OWNER'] = 'ci.yml/build';
+  assert.equal((await main.restore()).restored, 'rust');
+  assert.equal(fs.readFileSync(path.join(main.workspace, dependency), 'utf8'), 'built by the owner workflow');
+  write(path.join(main.workspace, 'Cargo.lock'), 'version = 4\n# helper dependency change\n');
+  await main.save();
+  assert.equal(entries('rust', 'refs/pull/9/merge').length, 1);
+  assert.deepEqual(entries('rust'), mainEntries, 'the shared owner cache keeps default-branch entries intact');
+});
+
 test('balances shards by size', () => {
   const files = [900, 500, 400, 300, 200, 100].map((size, index) => ({ path: `f${index}`, size }));
   const shards = archive.plan(files, 1000);

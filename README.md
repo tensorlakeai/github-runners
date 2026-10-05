@@ -134,6 +134,24 @@ builds something different its own `key`:
           key: ${{ matrix.target }}
 ```
 
+### Share an existing job's cache
+
+Compatible jobs in different workflows can reuse an existing cache by naming
+its owning workflow and job. Use the same `key` and `working-directory`, and
+keep the target, toolchain and build flags compatible:
+
+```yaml
+      - uses: tensorlakeai/github-runners@v1
+        with:
+          languages: rust
+          cache-owner: build_platform_dataplane_on_merge.yaml/build_binary
+          key: dataplane-platform-dataplane-release-glibc-2.34-x86_64-gnu-and-musl
+```
+
+The owner job needs no configuration change. Existing entries are reused;
+branches and pull requests still save only to their own ref. Builds restore
+archives to local disk and do not share a writable build directory.
+
 ## What is cached
 
 | Language | Detected from | Cached |
@@ -195,6 +213,7 @@ of many small files.
 | `languages` | `auto` | `auto`, `none`, or a comma list of `rust`, `node`, `go`, `python`. |
 | `paths` | | Extra files or directories to cache, one per line, relative to `working-directory` or starting with `~/`. |
 | `key` | | Separates caches for jobs that build different things, such as matrix entries. |
+| `cache-owner` | | Reuse another job's cache in this repository, as `workflow.yml/job-id`; use its `key` and `working-directory`. |
 | `working-directory` | `.` | Where to search for lockfiles. |
 | `save` | `auto` | `auto` saves to the job's own branch or pull request when dependencies changed, except in merge queue runs; `true` also saves in merge queue runs; `false` never saves. |
 | `default-branch` | the repository's | The fallback cache for branches, and never expired. |

@@ -48,6 +48,16 @@ function workflowIdentity() {
   return ref.replace(/@.*$/, '');
 }
 
+function cacheIdentity() {
+  const owner = core.getInput('cache-owner', '');
+  if (!owner) return [workflowIdentity(), process.env.GITHUB_JOB || ''];
+  const match = /^([A-Za-z0-9_.-]+\.ya?ml)\/([A-Za-z_][A-Za-z0-9_-]*)$/.exec(owner);
+  if (!match) throw new Error('Input cache-owner must be workflow.yml/job-id in this repository.');
+  const repository = process.env.GITHUB_REPOSITORY || '';
+  if (!repository) throw new Error('Input cache-owner requires GITHUB_REPOSITORY.');
+  return [`${repository}/.github/workflows/${match[1]}`, match[2]];
+}
+
 function readEvent() {
   try {
     return JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
@@ -83,10 +93,11 @@ function load() {
   const workingDirectory = path.resolve(process.env.GITHUB_WORKSPACE || process.cwd(), core.getInput('working-directory', '.'));
   const key = core.getInput('key', '');
   const languages = parseLanguages(core.getInput('languages', 'auto'));
+  const [workflow, job] = cacheIdentity();
   const scope = sha256(JSON.stringify([
     process.env.GITHUB_REPOSITORY || '',
-    workflowIdentity(),
-    process.env.GITHUB_JOB || '',
+    workflow,
+    job,
     path.relative(process.env.GITHUB_WORKSPACE || process.cwd(), workingDirectory),
     key,
   ])).slice(0, 20);
