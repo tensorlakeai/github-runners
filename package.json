@@ -7,5 +7,6 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js"
-  }
+  },
+  "packageManager": "pnpm@11.28.5"
 }
